@@ -1,6 +1,0 @@
-# Ignore ทั้งโฟลเดอร์ llama.cpp ยกเว้นเฉพาะ .gguf
-llama.cpp/*
-!llama.cpp/build/
-!llama.cpp/build/models/
-!llama.cpp/build/models/openthaigpt/
-!llama.cpp/build/models/openthaigpt/*.gguf

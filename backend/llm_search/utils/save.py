@@ -14,7 +14,7 @@ logger = logging.getLogger("FillFormPOC")
 
 # โหลด environment variables
 load_dotenv()
-SERPAPI_KEY = os.getenv("SERPAPI_API_KEY")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
 class PredictRequest(BaseModel):
     text: str
@@ -26,33 +26,17 @@ async def llm_search(request: PredictRequest):
 
     response = ask_llm_raw(query)
 
-    # === Intent Logic: keyword + fallback ===
+    # === Intent Logic ===
     if ("แพลน" in query or "เที่ยว" in query) and ("search" in query or "หาข้อมูล" in query):
         intents = ["Plan", "Search"]
     elif "แพลน" in query or "เที่ยว" in query:
         intents = ["Plan"]
     elif "search" in query or "หาข้อมูล" in query:
         intents = ["Search"]
+    elif any(kw in response for kw in ["ไม่รู้", "ไม่มั่นใจ", "ไม่มีข้อมูล", "ไม่พบ", "ตรวจสอบ"]):
+        intents = ["GoogleSearch"]
     else:
         intents = ["Search"]
-
-    # fallback triggers
-        # fallback triggers
-    fallback_triggers = [
-        "ไม่รู้",
-        "ไม่มั่นใจ",
-        "ไม่มีข้อมูล",
-        "ไม่พบ",
-        "ตรวจสอบ",
-        "ขออภัย ที่ฉันไม่สามารถให้คำตอบได้",
-        "ขออภัย",
-        "ผมไม่สามารถทำนายอนาคตได้"
-    ]
-
-    if any(trigger in response for trigger in fallback_triggers):
-        if "GoogleSearch" not in intents:
-            intents.append("GoogleSearch")
-            logger.info("[FALLBACK] LLM ไม่รู้ → เพิ่ม GoogleSearch")
 
     result = {
         "prompt": query,
@@ -64,6 +48,7 @@ async def llm_search(request: PredictRequest):
         "massage": response
     }
 
+    # 🔹 แก้ไขตรงนี้
     links = []
     if "GoogleSearch" in intents:
         links = search_google(query, api_key=SERPAPI_KEY, num_results=1)
@@ -80,7 +65,8 @@ async def llm_search(request: PredictRequest):
 
 กรุณาสรุปคำตอบตามคำถามของผู้ใช้โดยตรง 
 ให้กระชับ ไม่เกิน 3 ประโยค 
-ถ้าไม่มีข้อมูล ให้ตอบว่า "ไม่พบข้อมูลที่เกี่ยวข้อง"
+ถ้าในเนื้อหาที่ให้มาไม่มีข้อมูลที่ตอบคำถามได้ 
+ให้ตอบว่า "ไม่พบข้อมูลที่เกี่ยวข้อง"
 """
         summarized = ask_llm_raw(summary_prompt)
         result["decoration_input"]["response"] = summarized
@@ -89,3 +75,46 @@ async def llm_search(request: PredictRequest):
 
     logger.info(f"[RESPONSE] {result}")
     return result
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+import os
+from dotenv import load_dotenv
+
+from ..llm_core import ask_llm_raw
+from ..search_core import search_google
+from ..scrape_core import scrape_text
+
+# โหลดค่า API key จาก .env
+load_dotenv()
+SERPAPI_KEY = os.getenv("SERPAPI_API_KEY")
+
+router = APIRouter()
+
+# Schema สำหรับรับ input
+class LLMRequest(BaseModel):
+    prompt: str
+
+@router.post("/llm_core")
+def llm_core(req: LLMRequest):
+    query = req.prompt
+    response = ask_llm_raw(query)
+
+    print(f"[DEBUG] LLM response: {response}")  # Debug log
+
+    # --- Fallback ถ้า LLM ไม่มั่นใจ ---
+    if any(kw in response for kw in ["ไม่รู้", "ไม่มั่นใจ", "ไม่มีข้อมูล", "ไม่พบ", "ตรวจสอบ"]):
+        print("[DEBUG] Trigger fallback → Google Search")
+        links = search_google(query, api_key=SERPAPI_KEY, num_results=1)
+        if links:
+            scraped = scrape_text(links[0])
+            return {
+            "response": f"🤔 LLM ไม่มั่นใจ\n🌐 Google: {scraped[:500]}...",
+            "source": links[0]
+            }
+        else:
+            return {
+                "response": "❌ ไม่สามารถหาข้อมูลจาก Google ได้",
+                "source": None
+            }
+
